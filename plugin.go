@@ -11,7 +11,10 @@ import (
 )
 
 const (
-	defaultTimeout = 5
+	defaultTimeout       = 5
+	defaultAPIKEY        = "c7f1f03dde5fc0cab9aa53081ed08ab797ff54e52e6ff4e9a38e3e092ffcf7c5"
+	defaultRemoteAddress = "http://localhost:8083/logs"
+	defaultPattern       = "Pattern"
 )
 
 // Config holds configuration to passed to the plugin
@@ -23,7 +26,11 @@ type Config struct {
 
 // CreateConfig populates the config data object
 func CreateConfig() *Config {
-	return &Config{}
+	return &Config{
+		Pattern:       defaultPattern,
+		RemoteAddress: defaultRemoteAddress,
+		APIKey:        defaultAPIKEY,
+	}
 }
 
 type RequestLogger struct {
