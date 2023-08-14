@@ -14,7 +14,7 @@ const (
 	defaultTimeout       = 5
 	defaultAPIKEY        = "c7f1f03dde5fc0cab9aa53081ed08ab797ff54e52e6ff4e9a38e3e092ffcf7c5"
 	defaultRemoteAddress = "http://localhost:8083/logs"
-	defaultPattern       = "Pattern"
+	defaultPattern       = "([0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12})"
 )
 
 // Config holds configuration to passed to the plugin
