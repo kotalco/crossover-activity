@@ -74,7 +74,7 @@ func (a *RequestLogger) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 func (a *RequestLogger) log(req *http.Request) error {
 	requestId := requestKey(a.pattern, req.URL.Path)
 
-	requestBody := map[string]string{"request_id": requestId, "api_key": a.apiKey}
+	requestBody := map[string]string{"request_id": requestId}
 	jsonBody, err := json.Marshal(requestBody)
 	if err != nil {
 		return err
@@ -86,6 +86,7 @@ func (a *RequestLogger) log(req *http.Request) error {
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("API-Key", a.apiKey)
 
 	httpRes, err := a.client.Do(httpReq)
 	if err != nil {
