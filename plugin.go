@@ -86,7 +86,7 @@ func (a *RequestLogger) log(req *http.Request) error {
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("API-Key", a.apiKey)
+	httpReq.Header.Set("Api-Key", a.apiKey)
 
 	httpRes, err := a.client.Do(httpReq)
 	if err != nil {
