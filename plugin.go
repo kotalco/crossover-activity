@@ -70,7 +70,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 func (a *RequestLogger) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	log.Printf("URL: %s", req.URL.Host)
 	log.Printf("Path: %s ", req.URL.Path)
-	go a.log(req)
+	a.log(req)
 	a.next.ServeHTTP(rw, req)
 }
 
@@ -83,19 +83,25 @@ func (a *RequestLogger) log(req *http.Request) error {
 	requestBody := map[string]string{"request_id": requestId}
 	jsonBody, err := json.Marshal(requestBody)
 	if err != nil {
+		log.Printf("MARSHALERR: %s", err.Error())
 		return err
 	}
 
 	bodyReader := bytes.NewReader(jsonBody)
 	httpReq, err := http.NewRequest(http.MethodPost, a.remoteAddress, bodyReader)
 	if err != nil {
+		log.Printf("HTTPCALLERERR: %s", err.Error())
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Api-Key", a.apiKey)
+	log.Printf("HTTPREQUESTCALLURL: %s", httpReq.URL.Path)
+	log.Printf("HTTPREQUESTCALLBODY: %s", httpReq.Body)
+	log.Printf("HTTPREQUESTCALLJSONBODY: %s", jsonBody)
 
 	httpRes, err := a.client.Do(httpReq)
 	if err != nil {
+		log.Printf("AFTERDOERR: %s", err.Error())
 		return err
 	}
 
