@@ -7,10 +7,9 @@ import: github.com/kotalco/crossover
 summary: "call remote address with requestID and APIkey, don't wait for response"
 
 testData:
-  crossover:
-    #pattern used to extract the requestId from the urlPath
-    Pattern: "([0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12})"
-    #RemoteAddress the address used to call
-    RemoteAddress: "http://localhost:8083/logs"
-    #APIKey to validate the request integrity
-    APIKey: "c7f1f03dde5fc0cab9aa53081ed08ab797ff54e52e6ff4e9a38e3e092ffcf7c5"
+  #pattern used to extract the requestId from the urlPath
+  Pattern: "([0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12})"
+  #RemoteAddress the address used to call
+  RemoteAddress: "http://localhost:8083/logs"
+  #APIKey to validate the request integrity
+  APIKey: "c7f1f03dde5fc0cab9aa53081ed08ab797ff54e52e6ff4e9a38e3e092ffcf7c5"
