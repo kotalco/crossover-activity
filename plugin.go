@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+
 	//"fmt"
 	//"log"
 	"net/http"
@@ -69,12 +71,17 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 }
 
 func (a *RequestLogger) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	log.Printf("RequestHost: %s", req.URL.Host)
+	log.Printf("RequestPath: %s ", req.URL.Path)
 	a.log(req)
 	a.next.ServeHTTP(rw, req)
 }
 
 func (a *RequestLogger) log(req *http.Request) error {
 	requestId := requestKey(a.pattern, req.URL.Path)
+	log.Printf("REQUESTID: %s ", requestId)
+	log.Printf("REQUEST_PATTERN : %s ", a.pattern)
+	log.Printf("REQUEST_APIKEY : %s ", a.apiKey)
 
 	requestBody := map[string]string{"request_id": requestId}
 	jsonBody, err := json.Marshal(requestBody)
@@ -85,6 +92,7 @@ func (a *RequestLogger) log(req *http.Request) error {
 	bodyReader := bytes.NewReader(jsonBody)
 	httpReq, err := http.NewRequest(http.MethodPost, a.remoteAddress, bodyReader)
 	if err != nil {
+		log.Printf("HTTPCALLERERR: %s", err.Error())
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -92,6 +100,7 @@ func (a *RequestLogger) log(req *http.Request) error {
 
 	httpRes, err := a.client.Do(httpReq)
 	if err != nil {
+		log.Printf("HTTPDOERR: %s", err.Error())
 		return err
 	}
 
