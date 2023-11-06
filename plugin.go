@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 
 	//"fmt"
@@ -82,8 +83,12 @@ func (a *RequestLogger) log(req *http.Request) error {
 	log.Printf("REQUESTID: %s ", requestId)
 	log.Printf("REQUEST_PATTERN : %s ", a.pattern)
 	log.Printf("REQUEST_APIKEY : %s ", a.apiKey)
+	type dto struct {
+		RequestId string `json:"request_id"`
+		Count     int    `json:"count"`
+	}
 
-	requestBody := map[string]string{"request_id": requestId}
+	requestBody := dto{RequestId: requestId, Count: requestCount(req)}
 	jsonBody, err := json.Marshal(requestBody)
 	if err != nil {
 		return err
@@ -120,4 +125,23 @@ func requestKey(pattern string, path string) string {
 		return ""
 	}
 	return match[0]
+}
+
+func requestCount(req *http.Request) (count int) {
+	count = 1
+	contentType := req.Header.Get("Content-Type")
+	if contentType == "application/json" {
+		var requests []interface{}
+		body, err := ioutil.ReadAll(req.Body)
+		if err != nil {
+			return
+		}
+		err = json.Unmarshal(body, &requests)
+		if err != nil {
+			return
+		}
+		count = len(requests)
+		return
+	}
+	return
 }
