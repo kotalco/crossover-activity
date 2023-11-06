@@ -6,9 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-
-	//"fmt"
-	//"log"
 	"net/http"
 	"regexp"
 	"time"
@@ -71,17 +68,13 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 }
 
 func (a *RequestLogger) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
-	log.Printf("RequestHost: %s", req.URL.Host)
-	log.Printf("RequestPath: %s ", req.URL.Path)
-	a.log(req)
+	go a.log(req)
 	a.next.ServeHTTP(rw, req)
 }
 
 func (a *RequestLogger) log(req *http.Request) error {
 	requestId := requestKey(a.pattern, req.URL.Path)
 	log.Printf("REQUESTID: %s ", requestId)
-	log.Printf("REQUEST_PATTERN : %s ", a.pattern)
-	log.Printf("REQUEST_APIKEY : %s ", a.apiKey)
 
 	requestBody := map[string]string{"request_id": requestId}
 	jsonBody, err := json.Marshal(requestBody)
@@ -107,6 +100,8 @@ func (a *RequestLogger) log(req *http.Request) error {
 	if httpRes.StatusCode != http.StatusOK {
 		return err
 	}
+	log.Printf("Response: %s ", httpRes.Body)
+
 	return nil
 }
 
