@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 
 	//"fmt"
@@ -74,7 +74,15 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 func (a *RequestLogger) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	log.Printf("RequestHost: %s", req.URL.Host)
 	log.Printf("RequestPath: %s ", req.URL.Path)
-	a.log(req)
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		log.Printf("CloneBodyERR: %s ", err)
+		a.next.ServeHTTP(rw, req)
+	}
+	clonedRequest := req.Clone(req.Context())
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	clonedRequest.Body = io.NopCloser(bytes.NewReader(body))
+	go a.log(clonedRequest)
 	a.next.ServeHTTP(rw, req)
 }
 
@@ -132,16 +140,12 @@ func requestCount(req *http.Request) (count int) {
 	contentType := req.Header.Get("Content-Type")
 	if contentType == "application/json" {
 		var requests []interface{}
-		body, err := ioutil.ReadAll(req.Body)
-		if err != nil {
-			return
-		}
-		err = json.Unmarshal(body, &requests)
+		bodyBytes, _ := io.ReadAll(req.Body)
+		err := json.Unmarshal(bodyBytes, &requests)
 		if err != nil {
 			return
 		}
 		count = len(requests)
-		return
 	}
-	return
+	return count
 }
