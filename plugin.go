@@ -7,19 +7,15 @@ import (
 	"fmt"
 	"io"
 	"log"
-
-	//"fmt"
-	//"log"
 	"net/http"
 	"regexp"
+	"sync"
 	"time"
 )
 
 const (
-	defaultTimeout       = 5
-	defaultAPIKEY        = "c7f1f03dde5fc0cab9aa53081ed08ab797ff54e52e6ff4e9a38e3e092ffcf7c5"
-	defaultRemoteAddress = "http://localhost:8083/logs"
-	defaultPattern       = "([0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12})"
+	DefaultTimeout           = 10
+	MaxRequestBodySize int64 = 2 * 1024 * 1024 // 2 MB
 )
 
 // Config holds configuration to passed to the plugin
@@ -31,20 +27,29 @@ type Config struct {
 
 // CreateConfig populates the config data object
 func CreateConfig() *Config {
-	return &Config{
-		Pattern:       defaultPattern,
-		RemoteAddress: defaultRemoteAddress,
-		APIKey:        defaultAPIKEY,
-	}
+	return &Config{}
 }
 
 type RequestLogger struct {
-	next          http.Handler
-	name          string
-	client        http.Client
-	pattern       string
-	remoteAddress string
-	apiKey        string
+	next            http.Handler
+	name            string
+	client          *http.Client
+	compiledPattern *regexp.Regexp
+	remoteAddress   string
+	apiKey          string
+}
+
+// loggingRequestDto used to send request to the third party to save no of requests
+type loggingRequestDto struct {
+	RequestId string `json:"request_id"`
+	Count     int    `json:"count"`
+}
+
+// implement buffer pool using the sync.Pool type,to reduce the allocation when you are encoding JSON
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return new(bytes.Buffer)
+	},
 }
 
 // New created a new  plugin.
@@ -53,57 +58,67 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		return nil, fmt.Errorf("APIKey can't be empty")
 	}
 	if len(config.Pattern) == 0 {
-		return nil, fmt.Errorf("Pattern can't be empty")
+		return nil, fmt.Errorf("pattern can't be empty")
 	}
 	if len(config.RemoteAddress) == 0 {
 		return nil, fmt.Errorf("RemoteAddress can't be empty")
 	}
 
+	client := &http.Client{
+		Timeout: DefaultTimeout * time.Second,
+	}
+	compiledPattern := regexp.MustCompile(config.Pattern)
+
 	return &RequestLogger{
-		next: next,
-		name: name,
-		client: http.Client{
-			Timeout: defaultTimeout * time.Second,
-		},
-		pattern:       config.Pattern,
-		remoteAddress: config.RemoteAddress,
-		apiKey:        config.APIKey,
+		next:            next,
+		name:            name,
+		client:          client,
+		compiledPattern: compiledPattern,
+		remoteAddress:   config.RemoteAddress,
+		apiKey:          config.APIKey,
 	}, nil
 }
 
 func (a *RequestLogger) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
-	log.Printf("RequestHost: %s", req.URL.Host)
-	log.Printf("RequestPath: %s ", req.URL.Path)
-	body, err := io.ReadAll(req.Body)
-	if err != nil {
-		log.Printf("CloneBodyERR: %s ", err)
-		a.next.ServeHTTP(rw, req)
+	buf := bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufferPool.Put(buf)
+
+	// Limit the size of the request body that we will read
+	//this will guard the plugin malicious body request by users
+	_, err := io.CopyN(buf, req.Body, MaxRequestBodySize)
+	req.Body.Close()
+	if err != nil && err != io.EOF {
+		log.Printf("Error reading request body: %s", err)
+		http.Error(rw, "Error reading request body", http.StatusInternalServerError)
+		return
 	}
+
+	bodyReader := bytes.NewReader(buf.Bytes())
+	req.Body = io.NopCloser(bodyReader)
 	clonedRequest := req.Clone(req.Context())
-	req.Body = io.NopCloser(bytes.NewReader(body))
-	clonedRequest.Body = io.NopCloser(bytes.NewReader(body))
+	clonedRequest.Body = io.NopCloser(bytes.NewReader(buf.Bytes()))
+
 	go a.log(clonedRequest)
+
 	a.next.ServeHTTP(rw, req)
 }
 
 func (a *RequestLogger) log(req *http.Request) error {
-	requestId := requestKey(a.pattern, req.URL.Path)
-	log.Printf("REQUESTID: %s ", requestId)
-	log.Printf("REQUEST_PATTERN : %s ", a.pattern)
-	log.Printf("REQUEST_APIKEY : %s ", a.apiKey)
-	type dto struct {
-		RequestId string `json:"request_id"`
-		Count     int    `json:"count"`
-	}
+	requestId := a.requestKey(req.URL.Path)
+	requestBody := loggingRequestDto{RequestId: requestId, Count: requestCount(req)}
 
-	requestBody := dto{RequestId: requestId, Count: requestCount(req)}
-	jsonBody, err := json.Marshal(requestBody)
+	// Get a buffer from the pool and reset it back
+	buffer := bufferPool.Get().(*bytes.Buffer)
+	buffer.Reset()
+	defer bufferPool.Put(buffer)
+	encoder := json.NewEncoder(buffer)
+	err := encoder.Encode(requestBody)
 	if err != nil {
 		return err
 	}
 
-	bodyReader := bytes.NewReader(jsonBody)
-	httpReq, err := http.NewRequest(http.MethodPost, a.remoteAddress, bodyReader)
+	httpReq, err := http.NewRequest(http.MethodPost, a.remoteAddress, buffer)
 	if err != nil {
 		log.Printf("HTTPCALLERERR: %s", err.Error())
 		return err
@@ -116,19 +131,17 @@ func (a *RequestLogger) log(req *http.Request) error {
 		log.Printf("HTTPDOERR: %s", err.Error())
 		return err
 	}
+	defer httpRes.Body.Close()
 
 	if httpRes.StatusCode != http.StatusOK {
-		return err
+		bodyBytes, _ := io.ReadAll(httpRes.Body)
+		return fmt.Errorf("unexpected status code: %d, body: %s", httpRes.StatusCode, string(bodyBytes))
 	}
 	return nil
 }
 
-func requestKey(pattern string, path string) string {
-	// Compile the regular expression
-	re := regexp.MustCompile(pattern)
-	// Find the first match of the pattern in the URL Path
-	match := re.FindStringSubmatch(path)
-
+func (a *RequestLogger) requestKey(path string) string {
+	match := a.compiledPattern.FindStringSubmatch(path)
 	if len(match) == 0 {
 		return ""
 	}
@@ -136,16 +149,23 @@ func requestKey(pattern string, path string) string {
 }
 
 func requestCount(req *http.Request) (count int) {
-	count = 1
 	contentType := req.Header.Get("Content-Type")
-	if contentType == "application/json" {
-		var requests []interface{}
-		bodyBytes, _ := io.ReadAll(req.Body)
-		err := json.Unmarshal(bodyBytes, &requests)
-		if err != nil {
-			return
-		}
-		count = len(requests)
+	if contentType != "application/json" {
+		// if it's not of type json default to 1 and return before reading the body
+		return 1
 	}
+
+	decoder := json.NewDecoder(req.Body)
+	var requests []interface{}
+	if err := decoder.Decode(&requests); err != nil {
+		log.Printf("REQEUST_COUNT_ERR: %s", err.Error())
+		return 0
+	}
+
+	// ensure that it is fully read to the end and then closed to avoid resource leaks
+	io.Copy(io.Discard, req.Body)
+	req.Body.Close()
+
+	count = len(requests)
 	return count
 }
