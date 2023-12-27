@@ -15,7 +15,10 @@ import (
 
 const (
 	DefaultTimeout           = 10
-	MaxRequestBodySize int64 = 2 * 1024 * 1024 // 2 MB
+	MaxRequestBodySize int64 = 2 * 1024 * 1024  // 2 MB
+	LogBufferSize            = 1000             // buffer size for the log entries channel
+	MaxBatchSize             = 20               // number of logs to batch together
+	BatchFlushInterval       = 10 * time.Second // Time interval to flush logs to the database
 )
 
 // Config holds configuration to passed to the plugin
@@ -31,6 +34,7 @@ func CreateConfig() *Config {
 }
 
 type RequestLogger struct {
+	logsChannel     chan loggingRequestDto
 	next            http.Handler
 	name            string
 	client          *http.Client
@@ -69,14 +73,17 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	}
 	compiledPattern := regexp.MustCompile(config.Pattern)
 
-	return &RequestLogger{
+	logger := &RequestLogger{
+		logsChannel:     make(chan loggingRequestDto, LogBufferSize),
 		next:            next,
 		name:            name,
 		client:          client,
 		compiledPattern: compiledPattern,
 		remoteAddress:   config.RemoteAddress,
 		apiKey:          config.APIKey,
-	}, nil
+	}
+	go logger.batchProcessor()
+	return logger, nil
 }
 
 func (a *RequestLogger) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
@@ -85,7 +92,7 @@ func (a *RequestLogger) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	defer bufferPool.Put(buf)
 
 	// Limit the size of the request body that we will read
-	//this will guard the plugin malicious body request by users
+	//this will guard the plugin from malicious body request by users
 	_, err := io.CopyN(buf, req.Body, MaxRequestBodySize)
 	req.Body.Close()
 	if err != nil && err != io.EOF {
@@ -99,45 +106,78 @@ func (a *RequestLogger) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	clonedRequest := req.Clone(req.Context())
 	clonedRequest.Body = io.NopCloser(bytes.NewReader(buf.Bytes()))
 
-	go a.log(clonedRequest)
+	// Create log entry
+	logEntry := loggingRequestDto{
+		RequestId: a.requestKey(clonedRequest.URL.Path),
+		Count:     requestCount(clonedRequest),
+	}
+
+	//send logEntry to logsChannel with select and don't block
+	select {
+	case a.logsChannel <- logEntry:
+	default:
+		log.Printf("Dropped some log entries due to full buffer channel")
+	}
 
 	a.next.ServeHTTP(rw, req)
 }
 
-func (a *RequestLogger) log(req *http.Request) error {
-	requestId := a.requestKey(req.URL.Path)
-	requestBody := loggingRequestDto{RequestId: requestId, Count: requestCount(req)}
-
-	// Get a buffer from the pool and reset it back
-	buffer := bufferPool.Get().(*bytes.Buffer)
-	buffer.Reset()
-	defer bufferPool.Put(buffer)
-	encoder := json.NewEncoder(buffer)
-	err := encoder.Encode(requestBody)
-	if err != nil {
-		return err
+// batchProcessor runs in a separate goroutine and batches logs.
+func (a *RequestLogger) batchProcessor() {
+	var batch []loggingRequestDto
+	flushTimer := time.NewTimer(BatchFlushInterval)
+	for {
+		select {
+		case logEntry := <-a.logsChannel:
+			batch = append(batch, logEntry)
+			if len(batch) >= MaxBatchSize {
+				a.flushLogs(batch)
+				batch = nil // clear the batch
+			}
+		case <-flushTimer.C:
+			if len(batch) > 0 {
+				a.flushLogs(batch)
+				batch = nil // clear the batch
+			}
+			flushTimer.Reset(BatchFlushInterval)
+		}
 	}
+}
 
-	httpReq, err := http.NewRequest(http.MethodPost, a.remoteAddress, buffer)
-	if err != nil {
-		log.Printf("HTTPCALLERERR: %s", err.Error())
-		return err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Api-Key", a.apiKey)
+// flushLogs sends a batch of logs to the database.
+func (a *RequestLogger) flushLogs(batch []loggingRequestDto) {
+	// Aggregate the data and send it to the database
+	for _, logEntry := range batch {
+		// Get a buffer from the pool and reset it back
+		buffer := bufferPool.Get().(*bytes.Buffer)
+		buffer.Reset()
+		encoder := json.NewEncoder(buffer)
+		err := encoder.Encode(logEntry)
+		if err != nil {
+			log.Printf("FLUSH_LOGS: %s", err.Error())
+			continue
+		}
+		httpReq, err := http.NewRequest(http.MethodPost, a.remoteAddress, buffer)
+		if err != nil {
+			log.Printf("FLUSH_LOGS: %s", err.Error())
+			continue
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("X-Api-Key", a.apiKey)
 
-	httpRes, err := a.client.Do(httpReq)
-	if err != nil {
-		log.Printf("HTTPDOERR: %s", err.Error())
-		return err
+		httpRes, err := a.client.Do(httpReq)
+		if err != nil {
+			log.Printf("FLUSH_LOGS: %s", err.Error())
+			continue
+		}
+		if httpRes.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(httpRes.Body)
+			log.Printf("unexpected status code: %d, body: %s", httpRes.StatusCode, string(bodyBytes))
+			continue
+		}
+		bufferPool.Put(buffer)
+		httpRes.Body.Close()
 	}
-	defer httpRes.Body.Close()
-
-	if httpRes.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(httpRes.Body)
-		return fmt.Errorf("unexpected status code: %d, body: %s", httpRes.StatusCode, string(bodyBytes))
-	}
-	return nil
 }
 
 func (a *RequestLogger) requestKey(path string) string {
