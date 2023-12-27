@@ -146,38 +146,39 @@ func (a *RequestLogger) batchProcessor() {
 
 // flushLogs sends a batch of logs to the database.
 func (a *RequestLogger) flushLogs(batch []loggingRequestDto) {
-	// Aggregate the data and send it to the database
-	for _, logEntry := range batch {
-		// Get a buffer from the pool and reset it back
-		buffer := bufferPool.Get().(*bytes.Buffer)
-		buffer.Reset()
-		encoder := json.NewEncoder(buffer)
-		err := encoder.Encode(logEntry)
-		if err != nil {
-			log.Printf("FLUSH_LOGS: %s", err.Error())
-			continue
-		}
-		httpReq, err := http.NewRequest(http.MethodPost, a.remoteAddress, buffer)
-		if err != nil {
-			log.Printf("FLUSH_LOGS: %s", err.Error())
-			continue
-		}
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("X-Api-Key", a.apiKey)
+	// Aggregate the data and send it to the database in batches
+	// Get a buffer from the pool and reset it back
+	buffer := bufferPool.Get().(*bytes.Buffer)
+	buffer.Reset()
+	defer bufferPool.Put(buffer)
 
-		httpRes, err := a.client.Do(httpReq)
-		if err != nil {
-			log.Printf("FLUSH_LOGS: %s", err.Error())
-			continue
-		}
-		if httpRes.StatusCode != http.StatusOK {
-			bodyBytes, _ := io.ReadAll(httpRes.Body)
-			log.Printf("unexpected status code: %d, body: %s", httpRes.StatusCode, string(bodyBytes))
-			continue
-		}
-		bufferPool.Put(buffer)
-		httpRes.Body.Close()
+	encoder := json.NewEncoder(buffer)
+	err := encoder.Encode(batch)
+	if err != nil {
+		log.Printf("FLUSH_LOGS: %s", err.Error())
+		return
 	}
+	httpReq, err := http.NewRequest(http.MethodPost, a.remoteAddress, buffer)
+	if err != nil {
+		log.Printf("FLUSH_LOGS: %s", err.Error())
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Api-Key", a.apiKey)
+
+	httpRes, err := a.client.Do(httpReq)
+	if err != nil {
+		log.Printf("FLUSH_LOGS: %s", err.Error())
+		return
+	}
+	defer httpRes.Body.Close()
+
+	if httpRes.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(httpRes.Body)
+		log.Printf("unexpected status code: %d, body: %s", httpRes.StatusCode, string(bodyBytes))
+		return
+	}
+
 }
 
 func (a *RequestLogger) requestKey(path string) string {
