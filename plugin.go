@@ -167,11 +167,11 @@ func (a *RequestLogger) flushLogs(batch []loggingRequestDto) {
 	httpReq.Header.Set("X-Api-Key", a.apiKey)
 
 	httpRes, err := a.client.Do(httpReq)
+	defer httpRes.Body.Close()
 	if err != nil {
 		log.Printf("FLUSH_LOGS: %s", err.Error())
 		return
 	}
-	defer httpRes.Body.Close()
 
 	if httpRes.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(httpRes.Body)
