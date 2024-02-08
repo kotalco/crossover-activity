@@ -13,3 +13,9 @@ testData:
   RemoteAddress: "http://localhost:8083/logs"
   #APIKey to validate the request integrity
   APIKey: "c7f1f03dde5fc0cab9aa53081ed08ab797ff54e52e6ff4e9a38e3e092ffcf7c5"
+  #BufferSize  buffer size for the log entries channel
+  BufferSize: 100000
+  #BatchSize number of activity to batch together sent to the third party
+  BatchSize: 20
+  #FlushInterval Time in seconds interval to flush logs to the database
+  FlushInterval: 2
