@@ -1,8 +1,8 @@
-displayName: crossover
+displayName: crossover-activity
 type: middleware
 iconPath: .assets/icon.png
 
-import: github.com/kotalco/crossover
+import: github.com/kotalco/crossover-activity
 
 summary: "call remote address with requestID and APIkey, don't wait for response"
 

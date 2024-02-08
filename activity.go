@@ -1,4 +1,4 @@
-package crossover
+package crossover_activity
 
 import (
 	"bytes"
@@ -33,8 +33,8 @@ func CreateConfig() *Config {
 	return &Config{}
 }
 
-type RequestLogger struct {
-	logsChannel     chan loggingRequestDto
+type Activity struct {
+	logsChannel     chan activityRequestDto
 	next            http.Handler
 	name            string
 	client          *http.Client
@@ -44,7 +44,7 @@ type RequestLogger struct {
 }
 
 // loggingRequestDto used to send request to the third party to save no of requests
-type loggingRequestDto struct {
+type activityRequestDto struct {
 	RequestId string `json:"request_id"`
 	Count     int    `json:"count"`
 }
@@ -73,8 +73,8 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	}
 	compiledPattern := regexp.MustCompile(config.Pattern)
 
-	logger := &RequestLogger{
-		logsChannel:     make(chan loggingRequestDto, LogBufferSize),
+	handler := &Activity{
+		logsChannel:     make(chan activityRequestDto, LogBufferSize),
 		next:            next,
 		name:            name,
 		client:          client,
@@ -82,11 +82,11 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		remoteAddress:   config.RemoteAddress,
 		apiKey:          config.APIKey,
 	}
-	go logger.batchProcessor()
-	return logger, nil
+	go handler.batchProcessor()
+	return handler, nil
 }
 
-func (a *RequestLogger) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+func (a *Activity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	buf := bufferPool.Get().(*bytes.Buffer)
 	buf.Reset()
 	defer bufferPool.Put(buf)
@@ -107,7 +107,7 @@ func (a *RequestLogger) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	clonedRequest.Body = io.NopCloser(bytes.NewReader(buf.Bytes()))
 
 	// Create log entry
-	logEntry := loggingRequestDto{
+	logEntry := activityRequestDto{
 		RequestId: a.requestKey(clonedRequest.URL.Path),
 		Count:     requestCount(clonedRequest),
 	}
@@ -123,8 +123,8 @@ func (a *RequestLogger) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 }
 
 // batchProcessor runs in a separate goroutine and batches logs.
-func (a *RequestLogger) batchProcessor() {
-	var batch []loggingRequestDto
+func (a *Activity) batchProcessor() {
+	var batch []activityRequestDto
 	flushTimer := time.NewTimer(BatchFlushInterval)
 	for {
 		select {
@@ -145,7 +145,7 @@ func (a *RequestLogger) batchProcessor() {
 }
 
 // flushLogs sends a batch of logs to the database.
-func (a *RequestLogger) flushLogs(batch []loggingRequestDto) {
+func (a *Activity) flushLogs(batch []activityRequestDto) {
 	// Aggregate the data and send it to the database in batches
 	// Get a buffer from the pool and reset it back
 	buffer := bufferPool.Get().(*bytes.Buffer)
@@ -181,7 +181,7 @@ func (a *RequestLogger) flushLogs(batch []loggingRequestDto) {
 
 }
 
-func (a *RequestLogger) requestKey(path string) string {
+func (a *Activity) requestKey(path string) string {
 	match := a.compiledPattern.FindStringSubmatch(path)
 	if len(match) == 0 {
 		return ""
