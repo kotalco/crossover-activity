@@ -14,11 +14,11 @@ import (
 )
 
 const (
-	DefaultTimeout           = 10
-	MaxRequestBodySize int64 = 2 * 1024 * 1024  // 2 MB
-	LogBufferSize            = 1000             // buffer size for the log entries channel
-	MaxBatchSize             = 20               // number of logs to batch together
-	BatchFlushInterval       = 10 * time.Second // Time interval to flush logs to the database
+	DefaultTimeout                  = 10
+	MaxRequestBodySize        int64 = 2 * 1024 * 1024 // 2 MB
+	DefaultLogBufferSize            = 100000          // buffer size for the log entries channel
+	DefaultMaxBatchSize             = 20              // number of activity to batch together
+	DefaultBatchFlushInterval       = 2               // Time interval to flush logs to the database
 )
 
 // Config holds configuration to passed to the plugin
@@ -26,6 +26,9 @@ type Config struct {
 	Pattern       string
 	RemoteAddress string
 	APIKey        string
+	BufferSize    int
+	BatchSize     int
+	FlushInterval int
 }
 
 // CreateConfig populates the config data object
@@ -41,6 +44,8 @@ type Activity struct {
 	compiledPattern *regexp.Regexp
 	remoteAddress   string
 	apiKey          string
+	batchSize       int
+	flushInterval   int
 }
 
 // loggingRequestDto used to send request to the third party to save no of requests
@@ -67,6 +72,15 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	if len(config.RemoteAddress) == 0 {
 		return nil, fmt.Errorf("RemoteAddress can't be empty")
 	}
+	if config.BufferSize == 0 {
+		config.BufferSize = DefaultLogBufferSize
+	}
+	if config.BatchSize == 0 {
+		config.BatchSize = DefaultMaxBatchSize
+	}
+	if config.FlushInterval == 0 {
+		config.FlushInterval = DefaultBatchFlushInterval
+	}
 
 	client := &http.Client{
 		Timeout: DefaultTimeout * time.Second,
@@ -74,13 +88,15 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	compiledPattern := regexp.MustCompile(config.Pattern)
 
 	handler := &Activity{
-		logsChannel:     make(chan activityRequestDto, LogBufferSize),
+		logsChannel:     make(chan activityRequestDto, config.BufferSize),
 		next:            next,
 		name:            name,
 		client:          client,
 		compiledPattern: compiledPattern,
 		remoteAddress:   config.RemoteAddress,
 		apiKey:          config.APIKey,
+		batchSize:       config.BatchSize,
+		flushInterval:   config.FlushInterval,
 	}
 	go handler.batchProcessor()
 	return handler, nil
@@ -125,12 +141,12 @@ func (a *Activity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 // batchProcessor runs in a separate goroutine and batches logs.
 func (a *Activity) batchProcessor() {
 	var batch []activityRequestDto
-	flushTimer := time.NewTimer(BatchFlushInterval)
+	flushTimer := time.NewTimer(time.Duration(a.flushInterval) * time.Second)
 	for {
 		select {
 		case logEntry := <-a.logsChannel:
 			batch = append(batch, logEntry)
-			if len(batch) >= MaxBatchSize {
+			if len(batch) >= a.batchSize {
 				a.flushLogs(batch)
 				batch = nil // clear the batch
 			}
@@ -139,7 +155,7 @@ func (a *Activity) batchProcessor() {
 				a.flushLogs(batch)
 				batch = nil // clear the batch
 			}
-			flushTimer.Reset(BatchFlushInterval)
+			flushTimer.Reset(time.Duration(a.flushInterval) * time.Second)
 		}
 	}
 }
