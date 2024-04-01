@@ -123,11 +123,9 @@ func (a *Activity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	clonedRequest.Body = io.NopCloser(bytes.NewReader(buf.Bytes()))
 
 	// Create log entry
-	rC := requestCount(clonedRequest)
-	log.Println("RequestCount:", rC)
 	logEntry := activityRequestDto{
 		RequestId: a.requestKey(clonedRequest.URL.Path),
-		Count:     rC,
+		Count:     requestCount(clonedRequest),
 	}
 
 	//send logEntry to logsChannel with select and don't block
@@ -210,28 +208,21 @@ func (a *Activity) requestKey(path string) string {
 func requestCount(req *http.Request) (count int) {
 	contentType := req.Header.Get("Content-Type")
 	if contentType != "application/json" {
-		// if it's not of type json, default to 1 and return before reading the body
+		// if it's not of type json default to 1 and return before reading the body
 		return 1
 	}
 
-	bodyBytes, err := io.ReadAll(req.Body)
-	if err != nil {
-		log.Printf("REQUEST_READ_ERR: %s", err.Error())
-		return 0
-	}
+	decoder := json.NewDecoder(req.Body)
+	var requests []interface{}
+	err := decoder.Decode(&requests)
+
+	io.Copy(io.Discard, req.Body)
 	req.Body.Close()
 
-	var requests []interface{}
-	if err := json.Unmarshal(bodyBytes, &requests); err != nil {
-		var singleRequest interface{}
-		if err := json.Unmarshal(bodyBytes, &singleRequest); err != nil {
-			// If there's an error decoding as a single object, log the error and assume it's single request
-			log.Printf("REQUEST_COUNT_ERR: %s", err.Error())
-		}
-		count = 1
-		return count
+	if err != nil {
+		//if it fails to decode []objects assume it's a single object then return
+		return 1
 	}
-
 	count = len(requests)
 	return count
 }
