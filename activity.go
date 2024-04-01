@@ -123,9 +123,11 @@ func (a *Activity) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	clonedRequest.Body = io.NopCloser(bytes.NewReader(buf.Bytes()))
 
 	// Create log entry
+	rC := requestCount(clonedRequest)
+	log.Println("RequestCount:", rC)
 	logEntry := activityRequestDto{
 		RequestId: a.requestKey(clonedRequest.URL.Path),
-		Count:     requestCount(clonedRequest),
+		Count:     rC,
 	}
 
 	//send logEntry to logsChannel with select and don't block
@@ -208,20 +210,27 @@ func (a *Activity) requestKey(path string) string {
 func requestCount(req *http.Request) (count int) {
 	contentType := req.Header.Get("Content-Type")
 	if contentType != "application/json" {
-		// if it's not of type json default to 1 and return before reading the body
+		// if it's not of type json, default to 1 and return before reading the body
 		return 1
 	}
 
-	decoder := json.NewDecoder(req.Body)
-	var requests []interface{}
-	if err := decoder.Decode(&requests); err != nil {
-		log.Printf("REQEUST_COUNT_ERR: %s", err.Error())
+	bodyBytes, err := io.ReadAll(req.Body)
+	if err != nil {
+		log.Printf("REQUEST_READ_ERR: %s", err.Error())
 		return 0
 	}
-
-	// ensure that it is fully read to the end and then closed to avoid resource leaks
-	io.Copy(io.Discard, req.Body)
 	req.Body.Close()
+
+	var requests []interface{}
+	if err := json.Unmarshal(bodyBytes, &requests); err != nil {
+		var singleRequest interface{}
+		if err := json.Unmarshal(bodyBytes, &singleRequest); err != nil {
+			// If there's an error decoding as a single object, log the error and assume it's single request
+			log.Printf("REQUEST_COUNT_ERR: %s", err.Error())
+		}
+		count = 1
+		return count
+	}
 
 	count = len(requests)
 	return count
